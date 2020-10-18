@@ -159,6 +159,29 @@ func (p *Platform) Deploy(
 		pullPolicy = ""
 	}
 
+	// In case an image pull policy is set, use it
+	if p.config.ImagePullPolicy != "" {
+		pullPolicy = corev1.PullPolicy(p.config.ImagePullPolicy)
+	}
+
+	//Overrides the liveness delay, failure threshold and timeout
+	liveDelaySec, liveFailureThreshold, liveTimeoutSec, livePeriodSec := uint(5), uint(5), uint(5), uint(60)
+	if p.config.LivenessInitialDelaySeconds != 0 {
+		liveDelaySec = p.config.LivenessInitialDelaySeconds
+	}
+
+	if p.config.LivenessFailureThreshold != 0 {
+		liveFailureThreshold = p.config.LivenessFailureThreshold
+	}
+
+	if p.config.LivenessTimeoutSeconds != 0 {
+		liveTimeoutSec = p.config.LivenessTimeoutSeconds
+	}
+
+	if p.config.LivenessPeriodSeconds != 0 {
+		livePeriodSec = p.config.LivenessPeriodSeconds
+	}
+
 	// Update the deployment with our spec
 	deployment.Spec.Template.Spec = corev1.PodSpec{
 		Containers: []corev1.Container{
@@ -178,9 +201,10 @@ func (p *Platform) Deploy(
 							Port: intstr.FromInt(int(p.config.ServicePort)),
 						},
 					},
-					InitialDelaySeconds: 5,
-					TimeoutSeconds:      5,
-					FailureThreshold:    5,
+					InitialDelaySeconds: int32(liveDelaySec),
+					TimeoutSeconds:      int32(liveTimeoutSec),
+					FailureThreshold:    int32(liveFailureThreshold),
+					PeriodSeconds: 		 int32(livePeriodSec),
 				},
 				ReadinessProbe: &corev1.Probe{
 					Handler: corev1.Handler{
@@ -196,6 +220,7 @@ func (p *Platform) Deploy(
 		},
 	}
 
+	step.Update("Updating probe path...")
 	// Override the default TCP socket checks if we have a probe path
 	if p.config.ProbePath != "" {
 		deployment.Spec.Template.Spec.Containers[0].LivenessProbe = &corev1.Probe{
@@ -205,9 +230,9 @@ func (p *Platform) Deploy(
 					Port: intstr.FromInt(int(p.config.ServicePort)),
 				},
 			},
-			InitialDelaySeconds: 5,
-			TimeoutSeconds:      5,
-			FailureThreshold:    5,
+			InitialDelaySeconds: int32(liveDelaySec),
+			TimeoutSeconds:      int32(liveTimeoutSec),
+			FailureThreshold:    int32(liveFailureThreshold),
 		}
 
 		deployment.Spec.Template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{
@@ -290,7 +315,7 @@ func (p *Platform) Deploy(
 	// Create/update
 	if create {
 		log.Debug("no existing deployment, creating a new one")
-		step.Update("Creating deployment...")
+		step.Update("Creating deployment")
 		deployment, err = dc.Create(ctx, deployment, metav1.CreateOptions{})
 	} else {
 		log.Debug("updating deployment")
@@ -466,6 +491,21 @@ type Config struct {
 	// TODO Evaluate if this should remain as a default 3000, should be a required field,
 	// or default to another port.
 	ServicePort uint `hcl:"service_port,optional"`
+
+	// LivenessInitialDelaySeconds is the liveness probe's initial delay time in seconds
+	LivenessInitialDelaySeconds uint `hcl:"liveness_initial_delay_sec,optional"`
+
+	// LivenessTimeoutSeconds is the duration in seconds after which a liveness probe will be considered timed out
+	LivenessTimeoutSeconds uint `hcl:"liveness_timeout_sec,optional"`
+
+	// LivenessFailureThreshold specifies the number of failures as a threshold value
+	LivenessFailureThreshold uint `hcl:"liveness_failure_threshold,optional"`
+
+	// LivenessPeriodSeconds liveness probe check period in seconds
+	LivenessPeriodSeconds uint `hcl:"liveness_period_sec,optional"`
+
+	// ImagePullPolicy sets the container image pull policy
+	ImagePullPolicy string `hcl:"image_pull_policy,optional"`
 }
 
 func (p *Platform) Documentation() (*docs.Documentation, error) {
@@ -481,6 +521,11 @@ deploy "kubernetes" {
 	image_secret = "registry_secret"
 	count = 3
 	probe_path = "/_healthz"
+	liveness_initial_delay_sec = 10
+	liveness_timeout_sec = 5
+	liveness_failure_threshold = 3
+	liveness_period_sec = 60
+	image_pull_policy = "Always"
 }
 `)
 
@@ -565,6 +610,46 @@ deploy "kubernetes" {
 		),
 	)
 
+	doc.SetField(
+		"liveness_initial_delay_sec",
+		"sets liveness probe's initial delay time in seconds",
+		docs.Summary(
+			"Delay the first execution of a liveness probe",
+		),
+	)
+
+	doc.SetField(
+		"liveness_timeout_sec",
+		"duration in seconds after which a liveness probe will be considered timed out",
+		docs.Summary(
+			"Use this to control liveness timeout duration",
+		),
+	)
+
+	doc.SetField(
+		"liveness_failure_threshold",
+		"specifies the number of failures as a threshold value",
+		docs.Summary(
+			"Threshold number marking a failed liveness probe",
+		),
+	)
+
+	doc.SetField(
+		"liveness_period_sec",
+		"liveness probe check every N seconds",
+		docs.Summary(
+			"How often should we run liveness probes",
+		),
+	)
+
+	//image_pull_policy
+	doc.SetField(
+		"image_pull_policy",
+		"sets container image pull policy",
+		docs.Summary(
+			"Always, IfNotPresent or Never",
+		),
+	)
 	return doc, nil
 }
 
